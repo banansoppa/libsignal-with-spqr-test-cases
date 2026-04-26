@@ -1,3 +1,4 @@
+# This is a fork of libsignal with added benchmarks analogous to the benchmarks in SPQR
 # Overview
 
 libsignal contains platform-agnostic APIs used by the official Signal clients and servers, exposed
@@ -79,16 +80,16 @@ $ cargo test
 
 ### Additional Rust Tools
 
-The basic tools above should get you set up for most libsignal Rust development. 
+The basic tools above should get you set up for most libsignal Rust development.
 
-Eventually, you may find that you need some additional Rust tools like `cbindgen` to modify the bridges to the 
-client libraries or `taplo` for code formatting. 
+Eventually, you may find that you need some additional Rust tools like `cbindgen` to modify the bridges to the
+client libraries or `taplo` for code formatting.
 
 You should always install any Rust tools you need that may affect the build from cargo rather than from your system
 package manager (e.g. `apt` or `brew`). Package managers sometimes contain outdated versions of these tools that can break
 the build with incompatibility issues (especially cbindgen).
 
-To install the main Rust extra dependencies matching the versions we use, you can run the following commands: 
+To install the main Rust extra dependencies matching the versions we use, you can run the following commands:
 
 ```shell
 $ cargo +stable install cbindgen cargo-fuzz
@@ -142,7 +143,7 @@ $ make
 ```
 
 When exposing new APIs to Java, you will need to run `rust/bridge/jni/bin/gen_java_decl.py` in
-addition to rebuilding. This requires installing the `cbindgen` Rust tool, as detailed above. 
+addition to rebuilding. This requires installing the `cbindgen` Rust tool, as detailed above.
 
 ### Maven Central
 
