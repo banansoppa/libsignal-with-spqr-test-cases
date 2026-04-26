@@ -79,3 +79,7 @@ harness = false
 name = "kem"
 harness = false
 required-features = ["kyber768"]
+
+[[bench]]
+name = "double_ratchet"
+harness = false

@@ -11,9 +11,7 @@ use crate::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
 use crate::ratchet::{ChainKey, MessageKeyGenerator};
 use crate::state::{InvalidSessionError, SessionState};
 use crate::{
-    session, CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair,
-    KyberPayload, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey,
-    Result, SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore,
+    CiphertextMessage, CiphertextMessageType, Direction, IdentityKey, IdentityKeyStore, KeyPair, KyberPayload, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey, Result, SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore, session
 };
 
 pub async fn message_encrypt(
@@ -747,4 +745,167 @@ fn get_or_create_message_key(
 
     state.set_receiver_chain_key(their_ephemeral, &chain_key.next_chain_key())?;
     Ok(chain_key.message_keys())
+}
+
+// CKA send for benchmarking, returns a correct message header with an empty ciphertext
+pub async fn ckasend(
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+    remote_address: &ProtocolAddress,
+    ctr: u64) -> Result<(CiphertextMessage, [u8; 32])> {
+    let mut session_record = session_store
+        .load_session(remote_address)
+        .await.unwrap()
+        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone())).unwrap();
+
+    let session_state = session_record
+        .session_state_mut()
+        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
+
+    let chain_key = session_state.get_sender_chain_key()?;
+
+    let message_keys = chain_key.message_keys().generate_keys();
+
+    let sender_ephemeral = session_state.sender_ratchet_key()?;
+    let previous_counter = session_state.previous_counter();
+    let session_version = session_state
+        .session_version()?
+        .try_into()
+        .map_err(|_| SignalProtocolError::InvalidSessionStructure("version does not fit in u8"))?;
+
+    let local_identity_key = session_state.local_identity_key()?;
+    let their_identity_key = session_state.remote_identity_key()?.ok_or_else(|| {
+        SignalProtocolError::InvalidState(
+            "message_encrypt",
+            format!("no remote identity key for {remote_address}"),
+        )
+    })?;
+
+    let ctext = [ctr as u8];
+    let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
+        let timestamp_as_unix_time = items
+            .timestamp()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let local_registration_id = session_state.local_registration_id();
+
+        log::info!(
+            "Building PreKeyWhisperMessage for: {} with preKeyId: {} (session created at {})",
+            remote_address,
+            items
+                .pre_key_id()
+                .map_or_else(|| "<none>".to_string(), |id| id.to_string()),
+            timestamp_as_unix_time,
+        );
+
+        let message = SignalMessage::new(
+            session_version,
+            message_keys.mac_key(),
+            sender_ephemeral,
+            chain_key.index(),
+            previous_counter,
+            &ctext,
+            &local_identity_key,
+            &their_identity_key,
+        )?;
+
+        let kyber_payload = items
+            .kyber_pre_key_id()
+            .zip(items.kyber_ciphertext())
+            .map(|(id, ciphertext)| KyberPayload::new(id, ciphertext.into()));
+
+        CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::new(
+            session_version,
+            local_registration_id,
+            items.pre_key_id(),
+            items.signed_pre_key_id(),
+            kyber_payload,
+            *items.base_key(),
+            local_identity_key,
+            message,
+        )?)
+    } else {
+        CiphertextMessage::SignalMessage(SignalMessage::new(
+            session_version,
+            message_keys.mac_key(),
+            sender_ephemeral,
+            chain_key.index(),
+            previous_counter,
+            &ctext,
+            &local_identity_key,
+            &their_identity_key,
+        )?)
+    };
+
+    session_state.set_sender_chain_key(&chain_key.next_chain_key());
+
+    identity_store
+        .save_identity(remote_address, &their_identity_key)
+        .await?;
+
+    session_store
+        .store_session(remote_address, &session_record)
+        .await?;
+    Ok((message, *message_keys.cipher_key()))
+
+}
+
+// CKA receive for benchmarking, returns all necessary keys to decrypt "ciphertext"
+pub async fn ckarecv<R: Rng + CryptoRng>(
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+    ciphertext: &CiphertextMessage,
+    remote_address: &ProtocolAddress,
+    csprng: &mut R,
+) -> [u8; 32] {
+    let mut session_record = session_store
+        .load_session(remote_address)
+        .await.unwrap()
+        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone())).unwrap();
+    let state = session_record.session_state_mut().unwrap();
+
+    let (message_type, message) = match ciphertext {
+        CiphertextMessage::SignalMessage(m) => {
+            Ok((CiphertextMessageType::Whisper, m))
+        }
+        CiphertextMessage::PreKeySignalMessage(m) => {
+            Ok((CiphertextMessageType::PreKey, m.message()))
+        }
+        _ => Err(SignalProtocolError::InvalidArgument(format!(
+            "ckarecv: strange message {:?} ",
+            ciphertext.message_type()
+        ))),
+    }.unwrap();
+
+    let their_ephemeral = message.sender_ratchet_key();
+    let counter = message.counter();
+    let chain_key = get_or_create_chain_key(state, their_ephemeral, remote_address, csprng).unwrap();
+    let message_keys = get_or_create_message_key(
+        state,
+        their_ephemeral,
+        remote_address,
+        message_type,
+        &chain_key,
+        counter,
+    ).unwrap()
+    .generate_keys();
+
+    let identity_key =
+        state
+            .remote_identity_key().unwrap()
+            .ok_or(SignalProtocolError::InvalidSessionStructure(
+                "cannot decrypt without remote identity key",
+            )).unwrap();
+
+    state.clear_unacknowledged_pre_key_message();
+    identity_store
+        .save_identity(remote_address, &identity_key)
+        .await.unwrap();
+
+    session_store
+        .store_session(remote_address, &session_record)
+        .await.unwrap();
+
+    *message_keys.cipher_key()
 }
