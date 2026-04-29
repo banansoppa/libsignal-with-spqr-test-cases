@@ -755,8 +755,8 @@ pub async fn ckasend(
     ctr: u64) -> Result<(CiphertextMessage, [u8; 32])> {
     let mut session_record = session_store
         .load_session(remote_address)
-        .await.unwrap()
-        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone())).unwrap();
+        .await?
+        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
 
     let session_state = session_record
         .session_state_mut()
@@ -858,11 +858,11 @@ pub async fn ckarecv<R: Rng + CryptoRng>(
     ciphertext: &CiphertextMessage,
     remote_address: &ProtocolAddress,
     csprng: &mut R,
-) -> [u8; 32] {
+) -> Result<[u8; 32]> {
     let mut session_record = session_store
         .load_session(remote_address)
-        .await.unwrap()
-        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone())).unwrap();
+        .await?
+        .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
     let state = session_record.session_state_mut().unwrap();
 
     let (message_type, message) = match ciphertext {
@@ -876,11 +876,11 @@ pub async fn ckarecv<R: Rng + CryptoRng>(
             "ckarecv: strange message {:?} ",
             ciphertext.message_type()
         ))),
-    }.unwrap();
+    }?;
 
     let their_ephemeral = message.sender_ratchet_key();
     let counter = message.counter();
-    let chain_key = get_or_create_chain_key(state, their_ephemeral, remote_address, csprng).unwrap();
+    let chain_key = get_or_create_chain_key(state, their_ephemeral, remote_address, csprng)?;
     let message_keys = get_or_create_message_key(
         state,
         their_ephemeral,
@@ -888,24 +888,24 @@ pub async fn ckarecv<R: Rng + CryptoRng>(
         message_type,
         &chain_key,
         counter,
-    ).unwrap()
+    )?
     .generate_keys();
 
     let identity_key =
         state
-            .remote_identity_key().unwrap()
+            .remote_identity_key()?
             .ok_or(SignalProtocolError::InvalidSessionStructure(
                 "cannot decrypt without remote identity key",
-            )).unwrap();
+            ))?;
 
     state.clear_unacknowledged_pre_key_message();
     identity_store
         .save_identity(remote_address, &identity_key)
-        .await.unwrap();
+        .await?;
 
     session_store
         .store_session(remote_address, &session_record)
-        .await.unwrap();
+        .await?;
 
-    *message_keys.cipher_key()
+    Ok(*message_keys.cipher_key())
 }

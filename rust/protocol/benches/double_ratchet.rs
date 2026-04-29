@@ -39,14 +39,13 @@ mod support;
 //    });
 //}
 
+struct CKAState {
+    store: InMemSignalProtocolStore,
+    address: ProtocolAddress
+}
 
-
-pub fn send_recv_result(c: &mut Criterion) -> Result<(), SignalProtocolError>{
-    let mut ctr: u64 = 0;
-
-    //let mut a = state(Direction::A2B);
-    //let mut b = state(Direction::B2A);
-    let (alice_session_record, bob_session_record) = support::initialize_sessions_v3()?;
+fn init_states() -> (CKAState, CKAState) {
+    let (alice_session_record, bob_session_record) = support::initialize_sessions_v3().unwrap();
 
     let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
     let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
@@ -57,24 +56,36 @@ pub fn send_recv_result(c: &mut Criterion) -> Result<(), SignalProtocolError>{
     alice_store
         .store_session(&bob_address, &alice_session_record)
         .now_or_never()
-        .expect("sync")?;
+        .expect("sync").unwrap();
     bob_store
         .store_session(&alice_address, &bob_session_record)
         .now_or_never()
-        .expect("sync")?;
+        .expect("sync").unwrap();
+
+    let alice_state = CKAState {store: alice_store, address: alice_address};
+    let bob_state = CKAState {store: bob_store, address: bob_address};
+    (alice_state, bob_state)
+}
+
+pub fn send_recv_result(c: &mut Criterion) -> Result<(), SignalProtocolError>{
+    let mut ctr: u64 = 0;
+
+    //let mut a = state(Direction::A2B);
+    //let mut b = state(Direction::B2A);
+    let (mut alice_state, mut bob_state) = init_states();
 
     let mut rng = OsRng.unwrap_err();
     let mut old_key_a = [42; 32];
     c.bench_function("double ratchet send + recv", |b| {
         b.iter(|| {
             ctr += 1;
-            let ((x_store, x_address), (y_store, y_address)) = if ctr % 2 == 1 {
-                ((&mut alice_store, &alice_address), (&mut bob_store, &bob_address))
+            let (x_state, y_state) = if ctr % 2 == 1 {
+                (&mut alice_state, &mut bob_state)
             } else {
-                ((&mut bob_store, &bob_address), (&mut alice_store, &alice_address))
+                (&mut bob_state, &mut alice_state)
             };
-            let (msg, key_a) = support::ckasend(x_store, &y_address, ctr).now_or_never().unwrap();
-            let key_b = support::ckarecv(y_store, &msg, &x_address, &mut rng).now_or_never().unwrap();
+            let (msg, key_a) = support::ckasend(&mut x_state.store, &y_state.address, ctr);
+            let key_b = support::ckarecv(&mut y_state.store, &msg, &x_state.address, &mut rng);
             assert_eq!(key_a, key_b);
             assert_ne!(key_b, old_key_a);
             old_key_a = key_a;
@@ -83,31 +94,36 @@ pub fn send_recv_result(c: &mut Criterion) -> Result<(), SignalProtocolError>{
     Ok(())
 }
 
-/*#[bench]
-fn long_chain_send(bench: &mut Bencher) {
+//#[bench]
+/*fn long_chain_send(c: &mut Criterion) -> Result<(), SignalProtocolError> {
     let mut rng = OsRng.unwrap_err();
-    let mut a = state(Direction::A2B);
-    let mut b = state(Direction::B2A);
+    let (mut a, mut b) = init_states();
+
 
     // Build a state with a lot of unused chain keys.
     for _i in 0..8 {
         for _j in 0..24000 {
-            let Send { state, .. } = send(&a, &mut rng).unwrap();
-            a = state;
+            let _ = support::ckasend(&mut a.store, &b.address, 0);
+            //let Send { state, .. } = send(&a, &mut rng).unwrap();
+            //a = state;
         }
-        let Send { state, msg, .. } = send(&a, &mut rng).unwrap();
-        a = state;
-        let Recv { state, .. } = recv(&b, &msg).unwrap();
-        b = state;
+        let (msg, key_a) = support::ckasend(&mut a.store, &b.address, 0);
+        //a = state;
+        let key_b = support::ckarecv(&mut b.store, &msg, &a.address, &mut rng);
+        //let Recv { state, .. } = recv(&b, &msg).unwrap();
+        //b = state;
+        assert_eq!(key_a, key_b)
     }
 
-    println!("state size: {}", b.len());
-    let Send { msg, .. } = send(&a, &mut rng).unwrap();
-    bench.iter(|| {
-        black_box(recv(&b, &msg).unwrap());
+    //println!("state size: {}", );
+    let (msg, _ ) = support::ckasend(&mut a.store, &b.address, 0);
+    c.bench_function("double ratchet long chain send", |bench| {
+        bench.iter(|| {
+            let _ = support::ckarecv(&mut b.store, &msg, &a.address, &mut rng);
+        });
     });
-}
-*/
+    Ok(())
+}*/
 
 pub fn send_recv(c: &mut Criterion) {
     send_recv_result(c).expect("success");

@@ -466,18 +466,18 @@ impl HasSessionVersion for InMemSignalProtocolStore {
 
 
 
-pub async fn ckasend(
+pub fn ckasend(
     store: &mut InMemSignalProtocolStore,
     remote_address: &ProtocolAddress,
     ctr: u64,) -> (CiphertextMessage, [u8; 32]) {
-    libsignal_protocol::ckasend(&mut store.session_store, &mut store.identity_store, remote_address, ctr).await.unwrap()
+    libsignal_protocol::ckasend(&mut store.session_store, &mut store.identity_store, remote_address, ctr).now_or_never().unwrap().unwrap()
 }
 
-pub async fn ckarecv<R: Rng + CryptoRng>(
+pub fn ckarecv<R: Rng + CryptoRng>(
     store: &mut InMemSignalProtocolStore,
     message: &CiphertextMessage,
     remote_address: &ProtocolAddress,
     csprng: &mut R) -> [u8; 32] {
 
-    libsignal_protocol::ckarecv(&mut store.session_store, &mut store.identity_store, message, remote_address, csprng).await
+    libsignal_protocol::ckarecv(&mut store.session_store, &mut store.identity_store, message, remote_address, csprng).now_or_never().unwrap().unwrap()
 }
