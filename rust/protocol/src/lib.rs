@@ -22,6 +22,7 @@
 // https://doc.rust-lang.org/rustdoc/what-to-include.html for background.
 // #![warn(missing_docs)]
 
+mod bench_metrics;
 mod consts;
 mod crypto;
 pub mod error;
@@ -41,6 +42,7 @@ mod state;
 mod storage;
 mod timestamp;
 
+pub use bench_metrics::{bench_dr_dh_ratchet_count, reset_bench_dr_dh_ratchet_count};
 use error::Result;
 pub use error::SignalProtocolError;
 pub use fingerprint::{DisplayableFingerprint, Fingerprint, ScannableFingerprint};

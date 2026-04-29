@@ -671,6 +671,7 @@ fn get_or_create_chain_key<R: Rng + CryptoRng>(
     }
 
     log::info!("{remote_address} creating new chains.");
+    crate::bench_metrics::increment_bench_dr_dh_ratchet_count();
 
     let root_key = state.root_key()?;
     let our_ephemeral = state.sender_ratchet_private_key()?;

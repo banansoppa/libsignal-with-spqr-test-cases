@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -13,6 +14,28 @@ use rand::TryRngCore as _;
 
 #[path = "../tests/support/mod.rs"]
 mod support;
+
+static BENCH_SEND_COUNT: AtomicU64 = AtomicU64::new(0);
+static BENCH_RECV_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn reset_ratchet_counts() {
+    reset_bench_dr_dh_ratchet_count();
+    BENCH_SEND_COUNT.store(0, Ordering::Relaxed);
+    BENCH_RECV_COUNT.store(0, Ordering::Relaxed);
+}
+
+fn print_ratchet_counts(name: &str) {
+    let sends = BENCH_SEND_COUNT.load(Ordering::Relaxed);
+    let recvs = BENCH_RECV_COUNT.load(Ordering::Relaxed);
+    let iterations = sends.max(recvs);
+    eprintln!(
+        "[ratchet-counts] version=v073 bench=\"{name}\" iterations={iterations} sends={} recvs={} dr_symmetric={} dr_dh={} spqr_symmetric=0 braid_add_epoch=0",
+        sends,
+        recvs,
+        sends + recvs,
+        bench_dr_dh_ratchet_count(),
+    );
+}
 
 pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolError> {
     let (alice_session_record, bob_session_record) = support::initialize_sessions_v3()?;
@@ -53,23 +76,29 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
         .now_or_never()
         .expect("sync")?;
 
+    reset_ratchet_counts();
     c.bench_function("session encrypt", |b| {
         b.iter(|| {
+            BENCH_SEND_COUNT.fetch_add(1, Ordering::Relaxed);
             support::encrypt(&mut alice_store, &bob_address, "a short message")
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
-        })
+        });
     });
+    print_ratchet_counts("session encrypt");
+    reset_ratchet_counts();
     c.bench_function("session decrypt", |b| {
         b.iter(|| {
+            BENCH_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             let mut bob_store = bob_store.clone();
             support::decrypt(&mut bob_store, &alice_address, &message_to_decrypt)
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
-        })
+        });
     });
+    print_ratchet_counts("session decrypt");
 
     // Archive on Alice's side...
     let mut state = alice_store
@@ -200,40 +229,50 @@ pub fn session_encrypt_decrypt_result(c: &mut Criterion) -> Result<(), SignalPro
         .now_or_never()
         .expect("sync")?;
 
+    reset_ratchet_counts();
     c.bench_function("session encrypt+decrypt 1 way", |b| {
         b.iter(|| {
+            BENCH_SEND_COUNT.fetch_add(1, Ordering::Relaxed);
             let ctext = support::encrypt(&mut alice_store, &bob_address, "a short message")
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
+            BENCH_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             let _ptext = support::decrypt(&mut bob_store, &alice_address, &ctext)
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
-        })
+        });
     });
+    print_ratchet_counts("session encrypt+decrypt 1 way");
 
+    reset_ratchet_counts();
     c.bench_function("session encrypt+decrypt ping pong", |b| {
         b.iter(|| {
+            BENCH_SEND_COUNT.fetch_add(1, Ordering::Relaxed);
             let ctext = support::encrypt(&mut alice_store, &bob_address, "a short message")
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
+            BENCH_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             let _ptext = support::decrypt(&mut bob_store, &alice_address, &ctext)
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
 
+            BENCH_SEND_COUNT.fetch_add(1, Ordering::Relaxed);
             let ctext = support::encrypt(&mut bob_store, &alice_address, "a short message")
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
+            BENCH_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             let _ptext = support::decrypt(&mut alice_store, &bob_address, &ctext)
                 .now_or_never()
                 .expect("sync")
                 .expect("success");
-        })
+        });
     });
+    print_ratchet_counts("session encrypt+decrypt ping pong");
 
     Ok(())
 }
